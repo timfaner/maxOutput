@@ -1,0 +1,17 @@
+{
+  "name": "maxoutput1",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@uniswap/v3-periphery": "^1.4.4",
+    "dotenv": "^17.2.3",
+    "viem": "^2.38.5"
+  }
+}
