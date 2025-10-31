@@ -46,7 +46,7 @@ export const QUOTER_V2_ABI = [
   },
 ] as const satisfies Abi;
 
-export const CURVE_DY_INT128_ABI = [
+export const CURVE_SABLE_ABI = [
   {
     type: 'function',
     name: 'get_dy',
@@ -60,7 +60,7 @@ export const CURVE_DY_INT128_ABI = [
   },
 ] as const satisfies Abi;
 
-export const CURVE_DY_UINT256_ABI = [
+export const CURVE_CRYPTO_ABI = [
   {
     type: 'function',
     name: 'get_dy',

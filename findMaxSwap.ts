@@ -20,8 +20,8 @@ import {
 } from 'viem';
 import { mainnet, arbitrum, optimism } from 'viem/chains';
 import {
-  CURVE_DY_INT128_ABI,
-  CURVE_DY_UINT256_ABI,
+  CURVE_SABLE_ABI,
+  CURVE_CRYPTO_ABI,
   ERC20_ABI,
   QUOTER_V2_ABI,
   UNISWAP_V3_FACTORY_ABI,
@@ -54,29 +54,29 @@ const UNISWAP_V3_FACTORY: Record<Network, Address> = {
 // 连接器代币（尽量选流动性最强的原生桥版本）
 const CONNECTORS: Record<
   Network,
-  { WETH: Address; USDC: Address; DAI: Address }
+  { WETH: Address; USDC: Address; USDT: Address }
 > = {
   mainnet: {
     WETH: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-    USDC: '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
-    DAI:  '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+    USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    USDT:  '0xdAC17F958D2ee523a2206206994597C13D831ec7',
   },
   arbitrum: {
     WETH: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-    USDC: '0xaf88d065e77c8cc2239327c5edb3a432268e5831', // native USDC
-    DAI:  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+    USDC: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', // USDC.e
+    USDT:  '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
   },
   optimism: {
     WETH: '0x4200000000000000000000000000000000000006',
     USDC: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', // USDC.e（流动性广）
-    DAI:  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+    USDT:  '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
   },
 };
 
 // ------------------------- Curve 预置池 -------------------------
-// 说明：不同 Curve 池 get_dy 签名不同（int128 / uint256 索引），这里用 poolSpec 指明。
+// 说明：不同 Curve 池 get_dy 签名不同（StablePool / CryptoPool 索引），这里用 poolSpec 指明。
 // 已内置各网络≥2个示例池（可自行扩展）。
-type CurveIndexType = 'int128' | 'uint256';
+type CurveIndexType = 'StablePool' | 'CryptoPool';
 
 type CurvePoolSpec = {
   name: string;
@@ -91,25 +91,25 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
     // TriCrypto2: USDT/WBTC/WETH
     {
       name: 'Curve TriCrypto2',
-      pool: '0xD51a44d3FaE010294C616387e6cE3fFaEdbB6345',
-      indexType: 'uint256',
+      pool: '0xD51a44d3FaE010294C616388b506AcdA1bfAAE46',
+      indexType: 'CryptoPool',
       tokenIndex: {
         // 注意：键必须是校验后的小写地址字符串
-        ['0xdac17f958d2ee523a2206206994597c13d831ec7' as Address]: 0, // USDT
-        ['0x2260fac5e5542a773aa44fbcfedf7c193bc2c599' as Address]: 1, // WBTC
-        ['0xc02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'.toLowerCase() as Address]: 2, // WETH
+        ['0xdAC17F958D2ee523a2206206994597C13D831ec7'.toLowerCase() as Address]: 0, // USDT
+        ['0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599'.toLowerCase() as Address]: 1, // WBTC
+        ['0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'.toLowerCase() as Address]: 2, // WETH
       },
     },
-    // sUSD v2: DAI/USDC/USDT/sUSD
+    //  DAI/USDC/USDT
     {
-      name: 'Curve sUSD v2',
-      pool: '0xA5407eAE9Ba41422680e2e00537571bcC53efBfD',
-      indexType: 'int128',
+      name: 'Curve DAI/USDC/USDT',
+      pool: '0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7',
+      indexType: 'StablePool',
       tokenIndex: {
-        ['0x6b175474e89094c44da98b954eedeac495271d0f' as Address]: 0, // DAI
-        ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' as Address]: 1, // USDC
-        ['0xdac17f958d2ee523a2206206994597c13d831ec7' as Address]: 2, // USDT
-        ['0x57ab1ec28d129707052df4df418d58a2d46d5f51' as Address]: 3, // sUSD
+        ['0x6B175474E89094C44Da98b954EedeAC495271d0F'.toLowerCase()  as Address]: 0, // DAI
+        ['0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'.toLowerCase() as Address]: 1, // USDC
+        ['0xdAC17F958D2ee523a2206206994597C13D831ec7'.toLowerCase() as Address]: 2, // USDT
+
       },
     },
   ],
@@ -118,46 +118,54 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
     {
       name: 'Curve TriCrypto (Arbitrum)',
       pool: '0x960ea3e3C7FB317332d990873d354E18d7645590',
-      indexType: 'uint256',
+      indexType: 'CryptoPool',
       tokenIndex: {
-        ['0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9' as Address]: 0, // USDT
-        ['0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f' as Address]: 1, // WBTC
+        ['0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'.toLowerCase() as Address]: 0, // USDT
+        ['0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f'.toLowerCase() as Address]: 1, // WBTC
         ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'.toLowerCase() as Address]: 2, // WETH
       },
     },
     // 2Pool: USDC/USDT
     {
       name: 'Curve 2Pool (USDC/USDT)',
-      pool: '0x7f90122d6d3ea8eaf6b5f8fdd1cfa7f7f6a8ea6a',
-      indexType: 'int128',
+      pool: '0x7f90122BF0700F9E7e1F688fe926940E8839F353',
+      indexType: 'StablePool',
       tokenIndex: {
-        ['0xaf88d065e77c8cc2239327c5edb3a432268e5831' as Address]: 0, // USDC
-        ['0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9' as Address]: 1, // USDT
+        ['0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8'.toLowerCase() as Address]: 0, // USDC.e
+        ['0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'.toLowerCase() as Address]: 1, // USDT
       },
     },
   ],
   optimism: [
     // TriCrypto: USDT/WBTC/WETH（OP 版）
     {
-      name: 'Curve TriCrypto (Optimism)',
-      pool: '0x8e0B8c8BB9db49a46697F3a5Bb8A308e7448219D',
-      indexType: 'uint256',
+      name: 'Curve crvUSD/USDT (Optimism)',
+      pool: '0xD1b30BA128573fcd7D141C8A987961b40e047BB6',
+      indexType: 'StablePool',
       tokenIndex: {
-        ['0x94b008aa00579c1307b0ef2c499ad98a8ce58e58' as Address]: 0, // USDT
-        ['0x68f180fcce6836688e9084f035309e29bf0a2095' as Address]: 1, // WBTC
-        ['0x4200000000000000000000000000000000000006' as Address]: 2, // WETH
+        ['0xC52D7F23a2e460248Db6eE192Cb23dD12bDDCbf6'.toLowerCase() as Address]: 0, // crvUSD
+        ['0x94b008aA00579c1307B0EF2c499aD98a8ce58e58'.toLowerCase() as Address]: 1, // USDT
       },
     },
-    // sUSD v2（OP 版工厂池）：DAI/USDC/USDT/sUSD
+    // 3pool（OP）：DAI/USDC/USDT
     {
-      name: 'Curve sUSD v2 (Optimism)',
-      pool: '0x4e6a5d356d3a8385a3bdc6cf0cd6a7b8f1b9b5b3',
-      indexType: 'int128',
+      name: 'Curve 3pool (Optimism)',
+      pool: '0x1337BedC9D22ecbe766dF105c9623922A27963EC',
+      indexType: 'StablePool',
       tokenIndex: {
         ['0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1'.toLowerCase() as Address]: 0, // DAI
         ['0x7F5c764cBc14f9669B88837ca1490cCa17c31607'.toLowerCase() as Address]: 1, // USDC.e
-        ['0x94b008aa00579c1307b0ef2c499ad98a8ce58e58' as Address]: 2, // USDT
-        ['0x8c6f28f2f1a3c87f0f938b96d27520d9751ec8d9' as Address]: 3, // sUSD
+        ['0x94b008aA00579c1307B0EF2c499aD98a8ce58e58'.toLowerCase() as Address]: 2, // USDT
+      },
+    },
+    {
+      name: 'Curve Tricrypto-crvUSD (Optimism)',
+      pool: '0x4456d13Fc6736e8e8330394c0C622103E06ea419',
+      indexType: 'CryptoPool',
+      tokenIndex: {
+        ['0xC52D7F23a2e460248Db6eE192Cb23dD12bDDCbf6'.toLowerCase() as Address]: 0, // crvUSD
+        ['0x68f180fcCe6836688e9084f035309E29Bf0A2095'.toLowerCase() as Address]: 1, // WBTC
+        ['0x4200000000000000000000000000000000000006'.toLowerCase() as Address]: 2, // WETH
       },
     },
   ],
@@ -432,10 +440,10 @@ async function quoteCurve(
   if (i === undefined || j === undefined || i === j) return null;
 
   try {
-    if (spec.indexType === 'int128') {
+    if (spec.indexType === 'StablePool') {
       const dy = await client.readContract({
         address: spec.pool,
-        abi: CURVE_DY_INT128_ABI,
+        abi: CURVE_SABLE_ABI,
         functionName: 'get_dy',
         args: [BigInt(i), BigInt(j), amountIn],
       });
@@ -443,7 +451,7 @@ async function quoteCurve(
     } else {
       const dy = await client.readContract({
         address: spec.pool,
-        abi: CURVE_DY_UINT256_ABI,
+        abi: CURVE_CRYPTO_ABI,
         functionName: 'get_dy',
         args: [BigInt(i), BigInt(j), amountIn],
       });
