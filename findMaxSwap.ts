@@ -567,9 +567,6 @@ async function maxInputForRoute(
   // 4) now have boundary [lo, bad] and lo good, bad bad, binary search
   while (bad - lo > gap) {
     const mid = lo + (bad - lo) / 2n;
-    if (bad - lo < gap*10n){
-      console.log('bad - lo < 100', bad - lo);
-    }
     if (await isGood(mid)) {
       lo = mid;
     } else {
