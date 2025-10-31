@@ -1,13 +1,3 @@
-/* 
-  findMaxSwap.ts
-  需求要点：
-  - 仅链上只读：viem + QuoterV2 / Curve get_dy
-  - 支持主网 / Arbitrum / Optimism
-  - 直达与多跳（连接器：WETH/USDC/DAI）
-  - 价格偏离（执行价 vs “近零成交”的即时报价）<= 0.5%（50 bps）
-  - Bun 运行：bun run findMaxSwap.ts --network <network> --tokenIn <addr> --tokenOut <addr>
-*/
-
 import 'dotenv/config';
 import {
   Address,
@@ -28,30 +18,30 @@ import {
   UNIV3_POOL_ABI,
 } from './abi';
 
-// ------------------------- 常量与类型 -------------------------
+// ------------------------- Constants and Types -------------------------
 
 type Network = 'mainnet' | 'arbitrum' | 'optimism';
 
 const MAX_SLIPPAGE_BPS = 50n; // 0.5%
-const UNI_V3_FEE_TIERS: readonly number[] = [500, 3000, 10000] as const;
+const UNI_V3_FEE_TIERS: readonly number[] = [500, 3000] as const;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as Address;
 const POOL_ADDRESS_CACHE = new Map<string, Address | null>();
 
-// QuoterV2（各链一致地址，Uniswap 官方使用 CREATE2 部署）
+// QuoterV2 (same address on every chain, deployed by Uniswap with CREATE2)
 const QUOTER_V2: Record<Network, Address> = {
   mainnet: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
   arbitrum: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
   optimism: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
 };
 
-// Uniswap V3 Factory（各链一致地址）
+// Uniswap V3 Factory (same address on every chain)
 const UNISWAP_V3_FACTORY: Record<Network, Address> = {
   mainnet: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
   arbitrum: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
   optimism: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
 };
 
-// 连接器代币（尽量选流动性最强的原生桥版本）
+// Connector tokens (prefer the native-bridge variants with the deepest liquidity)
 const CONNECTORS: Record<
   Network,
   { WETH: Address; USDC: Address; USDT: Address }
@@ -68,21 +58,21 @@ const CONNECTORS: Record<
   },
   optimism: {
     WETH: '0x4200000000000000000000000000000000000006',
-    USDC: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', // USDC.e（流动性广）
+    USDC: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', // USDC.e (broad liquidity)
     USDT:  '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
   },
 };
 
-// ------------------------- Curve 预置池 -------------------------
-// 说明：不同 Curve 池 get_dy 签名不同（StablePool / CryptoPool 索引），这里用 poolSpec 指明。
-// 已内置各网络≥2个示例池（可自行扩展）。
+// ------------------------- Curve Preset Pools -------------------------
+// Note: different Curve pools use different get_dy signatures (StablePool / CryptoPool indexes); poolSpec clarifies them here.
+// Each network ships with at least two sample pools (feel free to extend).
 type CurveIndexType = 'StablePool' | 'CryptoPool';
 
 type CurvePoolSpec = {
   name: string;
   pool: Address;
   indexType: CurveIndexType;
-  // token 索引映射：tokenAddress => index
+  // Token index mapping: tokenAddress => index
   tokenIndex: Record<Address, number>;
 };
 
@@ -94,13 +84,13 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
       pool: '0xD51a44d3FaE010294C616388b506AcdA1bfAAE46',
       indexType: 'CryptoPool',
       tokenIndex: {
-        // 注意：键必须是校验后的小写地址字符串
+        // Note: keys must be validated lowercase address strings
         ['0xdAC17F958D2ee523a2206206994597C13D831ec7'.toLowerCase() as Address]: 0, // USDT
         ['0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599'.toLowerCase() as Address]: 1, // WBTC
         ['0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'.toLowerCase() as Address]: 2, // WETH
       },
     },
-    //  DAI/USDC/USDT
+    // DAI/USDC/USDT
     {
       name: 'Curve DAI/USDC/USDT',
       pool: '0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7',
@@ -137,7 +127,7 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
     },
   ],
   optimism: [
-    // TriCrypto: USDT/WBTC/WETH（OP 版）
+    // TriCrypto: USDT/WBTC/WETH (Optimism version)
     {
       name: 'Curve crvUSD/USDT (Optimism)',
       pool: '0xD1b30BA128573fcd7D141C8A987961b40e047BB6',
@@ -147,7 +137,7 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
         ['0x94b008aA00579c1307B0EF2c499aD98a8ce58e58'.toLowerCase() as Address]: 1, // USDT
       },
     },
-    // 3pool（OP）：DAI/USDC/USDT
+    // 3pool (Optimism): DAI/USDC/USDT
     {
       name: 'Curve 3pool (Optimism)',
       pool: '0x1337BedC9D22ecbe766dF105c9623922A27963EC',
@@ -174,7 +164,7 @@ const CURVE_POOLS: Record<Network, CurvePoolSpec[]> = {
 // ------------------------- ABIs -------------------------
 
 
-// ------------------------- 路由与报价 -------------------------
+// ------------------------- Routing and Quotes -------------------------
 
 type UniV3Leg = { kind: 'uniV3'; tokenIn: Address; tokenOut: Address; fee: number };
 type CurveLeg = { kind: 'curve'; tokenIn: Address; tokenOut: Address; spec: CurvePoolSpec };
@@ -193,84 +183,94 @@ function buildRoutes(
   const connectors = CONNECTORS[net];
   const tIn = lower(tokenIn);
   const tOut = lower(tokenOut);
+  const rawConnectorList = [connectors.WETH, connectors.USDC, connectors.USDT].filter(Boolean) as Address[];
+  const connectorList = Array.from(new Set(rawConnectorList.map(lower)))
+    .filter((addr) => addr !== tIn && addr !== tOut);
+  const curveSpecs = CURVE_POOLS[net];
 
-  // 1) Uniswap V3 直达（不同费档）
+  const addRoute = (legs: Route['legs'], label: string) => {
+    routes.push({ legs, label });
+  };
+
+  const hasCurvePath = (spec: CurvePoolSpec, a: Address, b: Address) => {
+    const idxA = spec.tokenIndex[a];
+    const idxB = spec.tokenIndex[b];
+    return idxA !== undefined && idxB !== undefined && idxA !== idxB;
+  };
+
+  // 1) Direct Uniswap V3 (different fee tiers)
   for (const fee of UNI_V3_FEE_TIERS) {
-    routes.push({
-      legs: [{ kind: 'uniV3', tokenIn: tIn, tokenOut: tOut, fee }],
-      label: `UniV3 ${fee / 10000}% direct`,
-    });
+    addRoute([{ kind: 'uniV3', tokenIn: tIn, tokenOut: tOut, fee }], `UniV3 ${fee / 10000}% direct`);
   }
-  return routes;
-  // 2) Uniswap V3 两跳（经由连接器）
-  for (const conn of [connectors.WETH, connectors.USDC, connectors.DAI]) {
-    const c = lower(conn);
-    if (c === tIn || c === tOut) continue;
+
+  // 2) Two-hop Uniswap V3 (via connector)
+  for (const c of connectorList) {
     for (const f1 of UNI_V3_FEE_TIERS) {
       for (const f2 of UNI_V3_FEE_TIERS) {
-        routes.push({
-          legs: [
+        addRoute(
+          [
             { kind: 'uniV3', tokenIn: tIn, tokenOut: c, fee: f1 },
             { kind: 'uniV3', tokenIn: c, tokenOut: tOut, fee: f2 },
           ],
-          label: `UniV3 ${f1}/${f2} via ${c}`,
-        });
+          `UniV3 ${f1}/${f2} via ${c}`,
+        );
       }
     }
   }
 
-  // 3) Curve 直达（如果同池）
-  for (const spec of CURVE_POOLS[net]) {
-    const idxIn = spec.tokenIndex[lower(tokenIn)];
-    const idxOut = spec.tokenIndex[lower(tokenOut)];
-    if (idxIn !== undefined && idxOut !== undefined && idxIn !== idxOut) {
-      routes.push({
-        legs: [{ kind: 'curve', tokenIn: tIn, tokenOut: tOut, spec }],
-        label: `Curve ${spec.name} direct`,
-      });
+  // 3) Direct Curve swap (if in the same pool)
+  for (const spec of curveSpecs) {
+    if (hasCurvePath(spec, tIn, tOut)) {
+      addRoute([{ kind: 'curve', tokenIn: tIn, tokenOut: tOut, spec }], `Curve ${spec.name} direct`);
     }
   }
 
-  // 4) 跨协议两跳：UniV3 -> Curve
-  for (const conn of [connectors.WETH, connectors.USDC, connectors.DAI]) {
-    const c = lower(conn);
-    if (c === tIn || c === tOut) continue;
-
-    // UniV3( tokenIn -> c ), Curve( c -> tokenOut )
+  // 4) Cross-protocol two-hop: UniV3 -> Curve / Curve -> UniV3
+  for (const c of connectorList) {
     for (const f1 of UNI_V3_FEE_TIERS) {
-      for (const spec of CURVE_POOLS[net]) {
-        const idx1 = spec.tokenIndex[c];
-        const idx2 = spec.tokenIndex[tOut];
-        if (idx1 !== undefined && idx2 !== undefined && idx1 !== idx2) {
-          routes.push({
-            legs: [
+      for (const spec of curveSpecs) {
+        if (hasCurvePath(spec, c, tOut)) {
+          addRoute(
+            [
               { kind: 'uniV3', tokenIn: tIn, tokenOut: c, fee: f1 },
               { kind: 'curve', tokenIn: c, tokenOut: tOut, spec },
             ],
-            label: `UniV3(${f1}) -> Curve(${spec.name}) via ${c}`,
-          });
+            `UniV3(${f1}) -> Curve(${spec.name}) via ${c}`,
+          );
         }
       }
     }
 
-    // Curve( tokenIn -> c ), UniV3( c -> tokenOut )
-    for (const spec of CURVE_POOLS[net]) {
-      const idx1 = spec.tokenIndex[tIn];
-      const idx2 = spec.tokenIndex[c];
-      if (idx1 !== undefined && idx2 !== undefined && idx1 !== idx2) {
-        for (const f2 of UNI_V3_FEE_TIERS) {
-          routes.push({
-            legs: [
-              { kind: 'curve', tokenIn: tIn, tokenOut: c, spec },
-              { kind: 'uniV3', tokenIn: c, tokenOut: tOut, fee: f2 },
-            ],
-            label: `Curve(${spec.name}) -> UniV3(${f2}) via ${c}`,
-          });
-        }
+    for (const spec of curveSpecs) {
+      if (!hasCurvePath(spec, tIn, c)) continue;
+      for (const f2 of UNI_V3_FEE_TIERS) {
+        addRoute(
+          [
+            { kind: 'curve', tokenIn: tIn, tokenOut: c, spec },
+            { kind: 'uniV3', tokenIn: c, tokenOut: tOut, fee: f2 },
+          ],
+          `Curve(${spec.name}) -> UniV3(${f2}) via ${c}`,
+        );
       }
     }
   }
 
+  // 5) Two-hop Curve (via connector)
+  for (const c of connectorList) {
+    for (const spec of curveSpecs) {
+      if (!hasCurvePath(spec, tIn, c)) continue;
+      for (const spec2 of curveSpecs) {
+        if (!hasCurvePath(spec2, c, tOut)) continue;
+        addRoute(
+          [
+            { kind: 'curve', tokenIn: tIn, tokenOut: c, spec },
+            { kind: 'curve', tokenIn: c, tokenOut: tOut, spec: spec2 },
+          ],
+          `Curve(${spec.name}) -> Curve(${spec2.name}) via ${c}`,
+        );
+      }
+    }
+  }
   return routes;
 }
 
@@ -427,7 +427,6 @@ export async function getUniV3MidPrice(
 }
 
 
-
 async function quoteCurve(
   client: PublicClient,
   spec: CurvePoolSpec,
@@ -457,11 +456,14 @@ async function quoteCurve(
       });
       return dy;
     }
-  } catch {
+  } catch (error) {
+    console.error('quoteCurve error', error, tokenIn, tokenOut,amountIn);
     return null;
   }
 }
 
+
+// TODO: use Curve Router and uniswap router to quote connector swap
 async function quoteRouteOut(
   client: PublicClient,
   network: Network,
@@ -480,29 +482,29 @@ async function quoteRouteOut(
   return dx;
 }
 
-// 计算：执行价相对“近零成交价”的偏离（含费）是否在 50bps 内
+// Check if the execution price deviates from the "near-zero execution price" (including fees) by no more than 50bps.
 function withinSlippageBps(
-  spotRateE18: bigint, // 1 tokenIn 可得 tokenOut 的比率，放大 1e18
+  spotRateE18: bigint, // Ratio of tokenOut per 1 tokenIn, scaled by 1e18
   amountIn: bigint,
   amountOut: bigint,
   maxBps: bigint,
 ): boolean {
   if (amountIn === 0n || amountOut === 0n) return false;
   const execRateE18 = (amountOut * 10n ** 18n) / amountIn;
-  if (execRateE18 >= spotRateE18) return true; // 没有负滑点
+  if (execRateE18 >= spotRateE18) return true; // No negative slippage
   const diff = spotRateE18 - execRateE18;
   const bps = (diff * 10000n) / spotRateE18;
   return bps <= maxBps;
 }
 
-// 为估算“近零成交价”，用极小输入（1 个最小单位）
+// small amount for quoteRouteOut
 function tinyAmount(decimals: number): bigint {
-  // 至少 1 个 base unit；对 18 位代币再乘 1e6，避免精度太低
-  if (decimals >= 12) return 100n ** BigInt(decimals - 12); // = 1e6 wei for 18-dec
+  // At least one base unit; multiply by 1e6 for 18-dec tokens to avoid poor precision
+  if (decimals >= 12) return 1000n ** BigInt(decimals - 12); // = 1e6 wei for 18-dec
   return 10n;
 }
 
-// 指数扩张 + 二分查找最大可输入量
+// Exponential expansion + binary search for the maximum input amount
 async function maxInputForRoute(
   client: PublicClient,
   network: Network,
@@ -516,10 +518,10 @@ async function maxInputForRoute(
   
   const spotRateE18 = (spotOut * 10n ** 18n) / tiny;
 
-  // 初始猜测：0.01 个 token
+  // Initial guess: 0.01 token
   const oneCent = decimalsIn >= 2 ? 10n ** BigInt(decimalsIn - 2) : 1n;
 
-  // 是否可用？
+  // Is it viable?
   const isGood = async (x: bigint): Promise<boolean> => {
     const out = await quoteRouteOut(client, network, route, x);
     return !!out && withinSlippageBps(spotRateE18, x, out, MAX_SLIPPAGE_BPS);
@@ -528,7 +530,7 @@ async function maxInputForRoute(
   let lo = 0n;
   let hi = oneCent;
 
-  // 如果初值太大，向下收缩
+  // If the initial value is too large, shrink downward
   let ok = await isGood(hi);
   if (!ok) {
     for (let i = 0; i < 30 && hi > 1n; i++) {
@@ -536,35 +538,36 @@ async function maxInputForRoute(
       ok = await isGood(hi);
       if (ok) break;
     }
-    if (!ok) return 0n; // 没有可行区间
+    if (!ok) return 0n; // No feasible interval
   }
   lo = hi;
 
 
   const HARD_CAP = 10n ** BigInt(Math.min(36, decimalsIn + 18));
   
-  // 2) 指数扩张直到遇到 bad 或到达硬上限
+  // 2) exponential expansion until bad or hard cap
   let bad = lo * 10n;
   while (bad <= HARD_CAP) {
     const ok = await isGood(bad);
-    if (!ok) break;       // 找到真正的 bad
-    lo = bad;             // 扩大可行解
-    bad = bad * 10n;       // 继续翻倍
+    if (!ok) break;       // Found the actual bad value
+    lo = bad;             // Expand the feasible solution
+    bad = bad * 10n;       // Keep doubling
   }
   
-  // 3) 若越界仍然 good，直接把 HARD_CAP 当作上限再试一次
+  // 3) if bad > HARD_CAP, try HARD_CAP again
   if (bad > HARD_CAP) {
     if (await isGood(HARD_CAP)) {
-      return HARD_CAP;    // 全区间都 good，只能返回硬上限
+      return HARD_CAP;    // Entire range is good, so return the hard cap
     } else {
-      bad = HARD_CAP;     // HARD_CAP 是 bad，上面已验证
+      bad = HARD_CAP;     // HARD_CAP is bad, already confirmed above
     }
   }
   
-  // 4) 现在有边界 [lo, bad] 且 lo good, bad bad，进行二分
-  while (bad - lo > tiny) {
+  const gap = decimalsIn >= 8 ? 10n ** BigInt(decimalsIn - 8) : 1n;
+  // 4) now have boundary [lo, bad] and lo good, bad bad, binary search
+  while (bad - lo > gap) {
     const mid = lo + (bad - lo) / 2n;
-    if (bad - lo < tiny*10n){
+    if (bad - lo < gap*10n){
       console.log('bad - lo < 100', bad - lo);
     }
     if (await isGood(mid)) {
@@ -573,10 +576,8 @@ async function maxInputForRoute(
       bad = mid;
     }
   }
-  return lo; // lo 为最大可行输入
+  return lo; 
 }
-
-// ------------------------- CLI & 主流程 -------------------------
 
 function parseArgs(argv: string[]) {
   let network: Network | null = null;
@@ -638,9 +639,13 @@ function formatAmountPretty(amount: bigint, decimals: number): string {
     let bestAmount: bigint = 0n;
     let bestRoute: Route | null = null;
 
-    // 遍历所有候选路由，取最大可输入
-    for (const r of routes) {
-      const amt = await maxInputForRoute(client, network, r, metaIn.decimals);
+    // Iterate through all candidate routes and take the largest feasible input
+    const promiseList = routes.map(r => 
+      maxInputForRoute(client, network, r, metaIn.decimals).then(amt => ({ amt, r }))
+    );
+    const amtRouteList = await Promise.all(promiseList);
+
+    for (const { amt, r } of amtRouteList) {
       if (amt > bestAmount) {
         bestAmount = amt;
         bestRoute = r;
@@ -654,7 +659,7 @@ function formatAmountPretty(amount: bigint, decimals: number): string {
 
     const pretty = formatAmountPretty(bestAmount, metaIn.decimals);
     console.log(`Maximum swap amount with 0.5% slippage: ${pretty} ${metaIn.symbol}`);
-    // 如需调试，可输出路由：console.error('route=', bestRoute.label);
+    console.log('route=', bestRoute.label);
   } catch (err) {
     console.error((err as Error).message);
     console.log('No valid swap route found.');
