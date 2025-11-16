@@ -299,11 +299,11 @@ function getChainAndRpc(network: Network) {
   }
   const client = createPublicClient({
     chain: picked.chain,
-    transport: http(picked.rpc),
+    transport: http(picked.rpc,{
+      batch: true
+    }),
     batch: {
-      multicall: {
-        wait: 300,
-      },
+      multicall: true,
     },
   });
   return client;
@@ -311,15 +311,14 @@ function getChainAndRpc(network: Network) {
 
 
 async function getTokenMeta(client: PublicClient, token: Address): Promise<{ decimals: number; symbol: string }> {
-  const waitTime = Math.floor(Math.random() * 150) + 150;
-  await new Promise(resolve => setTimeout(resolve, waitTime));
-  const decimals = Number(await client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }));
-  let symbol = '';
-  try {
-    symbol = await client.readContract({ address: token, abi: ERC20_ABI, functionName: 'symbol' });
-  } catch {
-    symbol = 'TOKEN';
-  }
+  
+  const [decimalsRaw, symbolRaw] = await Promise.all([
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }),
+    client.readContract({ address: token, abi: ERC20_ABI, functionName: 'symbol' }).catch(() => 'TOKEN'),
+  ]);
+
+  const decimals = Number(decimalsRaw);
+  const symbol = typeof symbolRaw === 'string' ? symbolRaw : 'TOKEN';
   return { decimals, symbol };
 }
 
@@ -660,12 +659,8 @@ function formatAmountPretty(amount: bigint, decimals: number): string {
     let bestRoute: Route | null = null;
 
     // Iterate through all candidate routes and take the largest feasible input
-    const promiseList = routes.map(r => 
-      maxInputForRoute(client, network, r, metaIn.decimals).then(amt => ({ amt, r }))
-    );
-    const amtRouteList = await Promise.all(promiseList);
-
-    for (const { amt, r } of amtRouteList) {
+    for (const r of routes) {
+      const amt = await maxInputForRoute(client, network, r, metaIn.decimals);
       if (amt > bestAmount) {
         bestAmount = amt;
         bestRoute = r;
