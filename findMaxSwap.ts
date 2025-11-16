@@ -297,11 +297,22 @@ function getChainAndRpc(network: Network) {
   if (!picked.rpc) {
     throw new Error(`缺少 ${network} RPC，请在 .env 中设置相应 *_RPC_URL`);
   }
-  const client = createPublicClient({ chain: picked.chain, transport: http(picked.rpc) });
+  const client = createPublicClient({
+    chain: picked.chain,
+    transport: http(picked.rpc),
+    batch: {
+      multicall: {
+        wait: 300,
+      },
+    },
+  });
   return client;
 }
 
+
 async function getTokenMeta(client: PublicClient, token: Address): Promise<{ decimals: number; symbol: string }> {
+  const waitTime = Math.floor(Math.random() * 150) + 150;
+  await new Promise(resolve => setTimeout(resolve, waitTime));
   const decimals = Number(await client.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }));
   let symbol = '';
   try {
@@ -499,6 +510,12 @@ function withinSlippageBps(
 
 // small amount for quoteRouteOut
 function tinyAmount(decimals: number): bigint {
+
+
+  if (decimals >= 3) 
+    return 10n ** BigInt(decimals - 3);
+
+  return 1n;
   // At least one base unit; multiply by 1e6 for 18-dec tokens to avoid poor precision
   if (decimals >= 12) return 1000n ** BigInt(decimals - 12); // = 1e6 wei for 18-dec
   return 10n;
@@ -511,6 +528,12 @@ async function maxInputForRoute(
   route: Route,
   decimalsIn: number,
 ): Promise<bigint> {
+
+
+  const waitTime = Math.floor(Math.random() * 150) + 150;
+  await new Promise(resolve => setTimeout(resolve, waitTime));
+
+
   const tiny = tinyAmount(decimalsIn);
   const spotOut = await quoteRouteOut(client, network, route, tiny);
   if (!spotOut || spotOut === 0n) return 0n;
